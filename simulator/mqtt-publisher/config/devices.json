@@ -1,0 +1,135 @@
+{
+  "devices": [
+    {
+      "id": "esp32-a4f3",
+      "alias": "Sensor Sala 101",
+      "type": "sensor",
+      "metrics": [
+        {
+          "name": "temperature",
+          "unit": "celsius",
+          "min": 18.0,
+          "max": 30.0,
+          "anomaly_min": 5.0,
+          "anomaly_max": 45.0
+        },
+        {
+          "name": "humidity",
+          "unit": "percent",
+          "min": 40.0,
+          "max": 80.0,
+          "anomaly_min": 10.0,
+          "anomaly_max": 95.0
+        }
+      ]
+    },
+    {
+      "id": "esp32-b7c1",
+      "alias": "Sensor Sala 102",
+      "type": "sensor",
+      "metrics": [
+        {
+          "name": "temperature",
+          "unit": "celsius",
+          "min": 18.0,
+          "max": 30.0,
+          "anomaly_min": 5.0,
+          "anomaly_max": 45.0
+        },
+        {
+          "name": "co2",
+          "unit": "ppm",
+          "min": 400.0,
+          "max": 1000.0,
+          "anomaly_min": 300.0,
+          "anomaly_max": 2000.0
+        }
+      ]
+    },
+    {
+      "id": "esp32-c9d2",
+      "alias": "Sensor Corredor",
+      "type": "sensor",
+      "metrics": [
+        {
+          "name": "temperature",
+          "unit": "celsius",
+          "min": 18.0,
+          "max": 30.0,
+          "anomaly_min": 5.0,
+          "anomaly_max": 45.0
+        },
+        {
+          "name": "pressure",
+          "unit": "hpa",
+          "min": 1010.0,
+          "max": 1020.0,
+          "anomaly_min": 990.0,
+          "anomaly_max": 1040.0
+        }
+      ]
+    },
+    {
+      "id": "esp32-e1f8",
+      "alias": "Sensor Laboratório",
+      "type": "sensor",
+      "metrics": [
+        {
+          "name": "temperature",
+          "unit": "celsius",
+          "min": 20.0,
+          "max": 25.0,
+          "anomaly_min": 5.0,
+          "anomaly_max": 45.0
+        },
+        {
+          "name": "humidity",
+          "unit": "percent",
+          "min": 30.0,
+          "max": 60.0,
+          "anomaly_min": 10.0,
+          "anomaly_max": 95.0
+        },
+        {
+          "name": "co2",
+          "unit": "ppm",
+          "min": 400.0,
+          "max": 800.0,
+          "anomaly_min": 300.0,
+          "anomaly_max": 2000.0
+        }
+      ]
+    },
+    {
+      "id": "esp32-f3a5",
+      "alias": "Sensor Externo",
+      "type": "sensor",
+      "metrics": [
+        {
+          "name": "temperature",
+          "unit": "celsius",
+          "min": 15.0,
+          "max": 35.0,
+          "anomaly_min": 0.0,
+          "anomaly_max": 50.0
+        },
+        {
+          "name": "humidity",
+          "unit": "percent",
+          "min": 50.0,
+          "max": 90.0,
+          "anomaly_min": 10.0,
+          "anomaly_max": 99.0
+        },
+        {
+          "name": "pressure",
+          "unit": "hpa",
+          "min": 1008.0,
+          "max": 1022.0,
+          "anomaly_min": 990.0,
+          "anomaly_max": 1040.0
+        }
+      ]
+    }
+  ]
+}
