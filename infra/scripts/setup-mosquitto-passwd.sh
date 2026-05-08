@@ -7,13 +7,13 @@
 set -e
 
 # Carrega variáveis do .env
-if [ ! -f "../.env" ]; then
+if [ ! -f ".env" ]; then
   echo "Erro: arquivo .env não encontrado em infra/.env"
   echo "Execute: cp .env.example .env e preencha as variáveis"
   exit 1
 fi
 
-source ../.env
+source .env
 
 echo "Configurando usuários do Mosquitto..."
 

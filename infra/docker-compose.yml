@@ -28,9 +28,9 @@ volumes:
   kafka-data:
   zookeeper-data:
 
-# ---------------------------------------------------------------------------
-# INFRAESTRUTURA
-# ---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
+    # INFRAESTRUTURA
+    # ---------------------------------------------------------------------------
 
 services:
 
@@ -44,18 +44,16 @@ services:
     container_name: edge-mosquitto
     restart: unless-stopped
     ports:
-      - "1883:1883"   # MQTT
-      - "9001:9001"   # WebSocket (útil para debug via browser)
+      - "1883:1883" # MQTT
+      - "9001:9001" # WebSocket (útil para debug via browser)
     volumes:
-      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-      - ./mosquitto/passwd:/mosquitto/config/passwd:ro
-      - ./mosquitto/acl:/mosquitto/config/acl:ro
+      - ./mosquitto/config:/mosquitto/config
       - ./mosquitto/data:/mosquitto/data
       - ./mosquitto/log:/mosquitto/log
     networks:
       - edge-net
     healthcheck:
-      test: ["CMD", "mosquitto_pub", "-h", "localhost", "-t", "healthcheck", "-m", "ping", "-u", "healthcheck-user", "-P", "healthcheck-pass"]
+      test: [ "CMD", "mosquitto_pub", "-h", "localhost", "-t", "healthcheck", "-m", "ping", "-u", "healthcheck-user", "-P", "healthcheck-pass" ]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -77,7 +75,7 @@ services:
     networks:
       - edge-net
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -102,7 +100,7 @@ services:
     networks:
       - edge-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-edge_user} -d ${POSTGRES_DB:-edge_db}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-edge_user} -d ${POSTGRES_DB:-edge_db}" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -129,7 +127,7 @@ services:
     networks:
       - edge-net
     healthcheck:
-      test: ["CMD", "influx", "ping"]
+      test: [ "CMD", "influx", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -154,7 +152,7 @@ services:
     networks:
       - edge-net
     healthcheck:
-      test: ["CMD", "echo", "ruok", "|", "nc", "localhost", "2181"]
+      test: [ "CMD", "echo", "ruok", "|", "nc", "localhost", "2181" ]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -167,8 +165,8 @@ services:
       zookeeper:
         condition: service_healthy
     ports:
-      - "9092:9092"     # acesso interno (outros containers)
-      - "29092:29092"   # acesso externo (host / servidor central futuro)
+      - "9092:9092" # acesso interno (outros containers)
+      - "29092:29092" # acesso externo (host / servidor central futuro)
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
@@ -183,207 +181,41 @@ services:
     networks:
       - edge-net
     healthcheck:
-      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      test: [ "CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092" ]
       interval: 15s
       timeout: 10s
       retries: 5
 
-# ---------------------------------------------------------------------------
-# SERVIÇOS DE APLICAÇÃO
-# ---------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
+  # SERVIÇOS DE APLICAÇÃO
+  # ---------------------------------------------------------------------------
 
   # --------------------------------------------------------------------------
   # Ingest Service — NestJS
   # Consome do Mosquitto via MQTT, deduplica via Redis, publica no Stream.
   # --------------------------------------------------------------------------
-  ingest-service:
+
+  sensor-simulator:
     build:
-      context: ../services/ingest-service
+      context: ../simulator/mqtt-publisher
       dockerfile: Dockerfile
-    container_name: edge-ingest
+    container_name: edge-simulator
     restart: unless-stopped
     depends_on:
       mosquitto:
         condition: service_healthy
-      redis:
-        condition: service_healthy
-    ports:
-      - "3001:3000"
-    environment:
-      NODE_ENV: ${NODE_ENV:-development}
-      LOCATION_ID: ${LOCATION_ID:?LOCATION_ID é obrigatório}
-
-      # MQTT
-      MQTT_BROKER_URL: mqtt://mosquitto:1883
-      MQTT_USERNAME: ${MQTT_EDGE_USERNAME:-edge-server}
-      MQTT_PASSWORD: ${MQTT_EDGE_PASSWORD:?MQTT_EDGE_PASSWORD é obrigatório}
-      MQTT_SUBSCRIBE_TOPIC: ${LOCATION_ID:?LOCATION_ID é obrigatório}/#
-
-      # Redis
-      REDIS_URL: redis://redis:6379
-
-      # Deduplicação
-      DEDUP_TTL_SECONDS: ${DEDUP_TTL_SECONDS:-30}
-
-      # Feature flags
-      ENABLE_INGEST: "true"
-    networks:
-      - edge-net
-
-  # --------------------------------------------------------------------------
-  # Persistence Service — NestJS
-  # Único serviço com acesso direto ao Postgres e InfluxDB.
-  # Consome streams: sensor.data.received, alert.created,
-  #                  actuator.command.sent, actuator.command.confirmed
-  # --------------------------------------------------------------------------
-  persistence-service:
-    build:
-      context: ../services/persistence-service
-      dockerfile: Dockerfile
-    container_name: edge-persistence
-    restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-      influxdb:
-        condition: service_healthy
-    ports:
-      - "3002:3000"
-    environment:
-      NODE_ENV: ${NODE_ENV:-development}
-      LOCATION_ID: ${LOCATION_ID:?LOCATION_ID é obrigatório}
-
-      # Redis
-      REDIS_URL: redis://redis:6379
-
-      # Postgres
-      POSTGRES_URL: postgresql://${POSTGRES_USER:-edge_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-edge_db}
-
-      # InfluxDB
-      INFLUXDB_URL: http://influxdb:8086
-      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
-      INFLUXDB_ORG: ${INFLUXDB_ORG:-tcc-iot}
-      INFLUXDB_BUCKET: ${INFLUXDB_BUCKET:-sensor_readings}
-
-      # Batch write (acumula N leituras antes de escrever no InfluxDB)
-      INFLUXDB_BATCH_SIZE: ${INFLUXDB_BATCH_SIZE:-50}
-      INFLUXDB_FLUSH_INTERVAL_MS: ${INFLUXDB_FLUSH_INTERVAL_MS:-5000}
-
-      # Feature flags
-      ENABLE_PERSISTENCE: "true"
-    networks:
-      - edge-net
-
-  # --------------------------------------------------------------------------
-  # ML Service — Python/FastAPI
-  # Consome stream: sensor.data.received
-  # Publica stream: anomaly.detected
-  # Volume para modelos treinados persistirem entre restarts.
-  # --------------------------------------------------------------------------
-  ml-service:
-    build:
-      context: ../services/ml-service
-      dockerfile: Dockerfile
-    container_name: edge-ml
-    restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
-    ports:
-      - "3003:8000"
     environment:
       LOCATION_ID: ${LOCATION_ID:?LOCATION_ID é obrigatório}
-      REDIS_URL: redis://redis:6379
-
-      # Configuração do modelo
-      ML_ANOMALY_CONFIDENCE_THRESHOLD: ${ML_ANOMALY_CONFIDENCE_THRESHOLD:-0.85}
-      ML_WINDOW_SIZE: ${ML_WINDOW_SIZE:-20}
-
-      # Feature flags
-      ENABLE_ML: ${ENABLE_ML:-true}
+      MQTT_BROKER_HOST: mosquitto
+      MQTT_BROKER_PORT: 1883
+      MQTT_USERNAME: ${MQTT_SIM_USERNAME:-simulator}
+      MQTT_PASSWORD: ${MQTT_SIM_PASSWORD:?MQTT_SIM_PASSWORD é obrigatório}
+      PUBLISH_INTERVAL_MS: ${PUBLISH_INTERVAL_MS:-500}
+      ANOMALY_INJECTION_RATE: ${ANOMALY_INJECTION_RATE:-0.05}
+      DEVICES_CONFIG: /app/config/devices.json
     volumes:
-      - ml-models:/app/models
+      # Monta o arquivo de devices do host — edite e reinicie o container
+      - ../simulator/mqtt-publisher/config/devices.json:/app/config/devices.json:ro
     networks:
       - edge-net
-
   # --------------------------------------------------------------------------
-  # Notification Service — NestJS
-  # Consome stream: anomaly.detected
-  # Publica stream: alert.created
-  # Chama Actuator Service via HTTP (orquestração direta para comandos)
-  # --------------------------------------------------------------------------
-  notification-service:
-    build:
-      context: ../services/notification-service
-      dockerfile: Dockerfile
-    container_name: edge-notification
-    restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    ports:
-      - "3004:3000"
-    environment:
-      NODE_ENV: ${NODE_ENV:-development}
-      LOCATION_ID: ${LOCATION_ID:?LOCATION_ID é obrigatório}
-
-      # Redis
-      REDIS_URL: redis://redis:6379
-
-      # Postgres (leitura de thresholds e configurações)
-      POSTGRES_URL: postgresql://${POSTGRES_USER:-edge_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-edge_db}
-
-      # Orquestração direta para atuadores
-      ACTUATOR_SERVICE_URL: http://actuator-service:3000
-
-      # Cooldown entre alertas do mesmo device/métrica (evita flood)
-      ALERT_COOLDOWN_SECONDS: ${ALERT_COOLDOWN_SECONDS:-60}
-
-      # Feature flags
-      ENABLE_NOTIFICATIONS: ${ENABLE_NOTIFICATIONS:-true}
-    networks:
-      - edge-net
-
-  # --------------------------------------------------------------------------
-  # Actuator Service — NestJS
-  # Recebe comandos via HTTP (do Notification Service)
-  # Publica no tópico MQTT do dispositivo
-  # Aguarda confirmação de status e publica eventos de resultado
-  # --------------------------------------------------------------------------
-  actuator-service:
-    build:
-      context: ../services/actuator-service
-      dockerfile: Dockerfile
-    container_name: edge-actuator
-    restart: unless-stopped
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    ports:
-      - "3005:3000"
-    environment:
-      NODE_ENV: ${NODE_ENV:-development}
-      LOCATION_ID: ${LOCATION_ID:?LOCATION_ID é obrigatório}
-
-      # MQTT (publica comandos, subscreve em status)
-      MQTT_BROKER_URL: mqtt://mosquitto:1883
-      MQTT_USERNAME: ${MQTT_EDGE_USERNAME:-edge-server}
-      MQTT_PASSWORD: ${MQTT_EDGE_PASSWORD:?MQTT_EDGE_PASSWORD é obrigatório}
-
-      # Redis
-      REDIS_URL: redis://redis:6379
-
-      # Timeout para aguardar confirmação do dispositivo
-      ACTUATOR_CONFIRM_TIMEOUT_MS: ${ACTUATOR_CONFIRM_TIMEOUT_MS:-5000}
-      ACTUATOR_MAX_RETRIES: ${ACTUATOR_MAX_RETRIES:-3}
-
-      # Feature flags
-      ENABLE_ACTUATORS: ${ENABLE_ACTUATORS:-true}
-    networks:
-      - edge-net
