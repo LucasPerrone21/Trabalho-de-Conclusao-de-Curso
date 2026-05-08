@@ -1,0 +1,389 @@
+version: "3.9"
+
+# =============================================================================
+# TCC IoT Platform — Edge Server
+# Localidade: configurada via LOCATION_ID no .env
+# =============================================================================
+#
+# Ordem de inicialização:
+#   1. Infraestrutura (mosquitto, redis, postgres, influxdb)
+#   2. Kafka mock (para canal Edge → Central)
+#   3. Serviços de aplicação (ingest, persistence, ml, notification, actuator)
+#
+# Uso:
+#   cp .env.example .env          # configure suas variáveis
+#   docker compose up -d          # sobe tudo
+#   docker compose logs -f        # acompanha logs
+# =============================================================================
+
+networks:
+  edge-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  influxdb-data:
+  redis-data:
+  ml-models:
+  kafka-data:
+  zookeeper-data:
+
+# ---------------------------------------------------------------------------
+# INFRAESTRUTURA
+# ---------------------------------------------------------------------------
+
+services:
+
+  # --------------------------------------------------------------------------
+  # MQTT Broker — Mosquitto
+  # Processo independente do Edge Server. Sensores continuam conectados
+  # mesmo que serviços de aplicação reiniciem.
+  # --------------------------------------------------------------------------
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: edge-mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"   # MQTT
+      - "9001:9001"   # WebSocket (útil para debug via browser)
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/passwd:/mosquitto/config/passwd:ro
+      - ./mosquitto/acl:/mosquitto/config/acl:ro
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    networks:
+      - edge-net
+    healthcheck:
+      test: ["CMD", "mosquitto_pub", "-h", "localhost", "-t", "healthcheck", "-m", "ping", "-u", "healthcheck-user", "-P", "healthcheck-pass"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # --------------------------------------------------------------------------
+  # Redis — Bus interno de eventos (Streams) + Deduplicação
+  # Streams por tipo de evento: separação explícita de responsabilidades.
+  # --------------------------------------------------------------------------
+  redis:
+    image: redis:7.2-alpine
+    container_name: edge-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf
+    networks:
+      - edge-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # --------------------------------------------------------------------------
+  # PostgreSQL — Dados relacionais
+  # devices, users, alerts, thresholds, alert_rules
+  # --------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: edge-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-edge_db}
+      POSTGRES_USER: ${POSTGRES_USER:-edge_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD é obrigatório}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - edge-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-edge_user} -d ${POSTGRES_DB:-edge_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --------------------------------------------------------------------------
+  # InfluxDB — Série temporal
+  # Leituras dos sensores. Batch writes configurados no Persistence Service.
+  # --------------------------------------------------------------------------
+  influxdb:
+    image: influxdb:2.7-alpine
+    container_name: edge-influxdb
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_USER:-admin}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_PASSWORD:?INFLUXDB_PASSWORD é obrigatório}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_ORG:-tcc-iot}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_BUCKET:-sensor_readings}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN:?INFLUXDB_TOKEN é obrigatório}
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    networks:
+      - edge-net
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --------------------------------------------------------------------------
+  # Zookeeper + Kafka — Canal Edge → Servidor Central
+  # Mock local: o servidor central se conectará a este Kafka quando existir.
+  # KRaft mode (sem Zookeeper) seria mais moderno, mas binode é mais estável
+  # para desenvolvimento local no Windows/WSL2.
+  # --------------------------------------------------------------------------
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: edge-zookeeper
+    restart: unless-stopped
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+    networks:
+      - edge-net
+    healthcheck:
+      test: ["CMD", "echo", "ruok", "|", "nc", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: edge-kafka
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"     # acesso interno (outros containers)
+      - "29092:29092"   # acesso externo (host / servidor central futuro)
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      # Tópicos que o servidor central consumirá futuramente
+      KAFKA_CREATE_TOPICS: "edge.sensor.data:1:1,edge.anomaly.detected:1:1,edge.alert.created:1:1"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - edge-net
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+# ---------------------------------------------------------------------------
+# SERVIÇOS DE APLICAÇÃO
+# ---------------------------------------------------------------------------
+
+  # --------------------------------------------------------------------------
+  # Ingest Service — NestJS
+  # Consome do Mosquitto via MQTT, deduplica via Redis, publica no Stream.
+  # --------------------------------------------------------------------------
+  ingest-service:
+    build:
+      context: ../services/ingest-service
+      dockerfile: Dockerfile
+    container_name: edge-ingest
+    restart: unless-stopped
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "3001:3000"
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      LOCATION_ID: ${LOCATION_ID:?LOCATION_ID é obrigatório}
+
+      # MQTT
+      MQTT_BROKER_URL: mqtt://mosquitto:1883
+      MQTT_USERNAME: ${MQTT_EDGE_USERNAME:-edge-server}
+      MQTT_PASSWORD: ${MQTT_EDGE_PASSWORD:?MQTT_EDGE_PASSWORD é obrigatório}
+      MQTT_SUBSCRIBE_TOPIC: ${LOCATION_ID:?LOCATION_ID é obrigatório}/#
+
+      # Redis
+      REDIS_URL: redis://redis:6379
+
+      # Deduplicação
+      DEDUP_TTL_SECONDS: ${DEDUP_TTL_SECONDS:-30}
+
+      # Feature flags
+      ENABLE_INGEST: "true"
+    networks:
+      - edge-net
+
+  # --------------------------------------------------------------------------
+  # Persistence Service — NestJS
+  # Único serviço com acesso direto ao Postgres e InfluxDB.
+  # Consome streams: sensor.data.received, alert.created,
+  #                  actuator.command.sent, actuator.command.confirmed
+  # --------------------------------------------------------------------------
+  persistence-service:
+    build:
+      context: ../services/persistence-service
+      dockerfile: Dockerfile
+    container_name: edge-persistence
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    ports:
+      - "3002:3000"
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      LOCATION_ID: ${LOCATION_ID:?LOCATION_ID é obrigatório}
+
+      # Redis
+      REDIS_URL: redis://redis:6379
+
+      # Postgres
+      POSTGRES_URL: postgresql://${POSTGRES_USER:-edge_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-edge_db}
+
+      # InfluxDB
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUXDB_ORG: ${INFLUXDB_ORG:-tcc-iot}
+      INFLUXDB_BUCKET: ${INFLUXDB_BUCKET:-sensor_readings}
+
+      # Batch write (acumula N leituras antes de escrever no InfluxDB)
+      INFLUXDB_BATCH_SIZE: ${INFLUXDB_BATCH_SIZE:-50}
+      INFLUXDB_FLUSH_INTERVAL_MS: ${INFLUXDB_FLUSH_INTERVAL_MS:-5000}
+
+      # Feature flags
+      ENABLE_PERSISTENCE: "true"
+    networks:
+      - edge-net
+
+  # --------------------------------------------------------------------------
+  # ML Service — Python/FastAPI
+  # Consome stream: sensor.data.received
+  # Publica stream: anomaly.detected
+  # Volume para modelos treinados persistirem entre restarts.
+  # --------------------------------------------------------------------------
+  ml-service:
+    build:
+      context: ../services/ml-service
+      dockerfile: Dockerfile
+    container_name: edge-ml
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "3003:8000"
+    environment:
+      LOCATION_ID: ${LOCATION_ID:?LOCATION_ID é obrigatório}
+      REDIS_URL: redis://redis:6379
+
+      # Configuração do modelo
+      ML_ANOMALY_CONFIDENCE_THRESHOLD: ${ML_ANOMALY_CONFIDENCE_THRESHOLD:-0.85}
+      ML_WINDOW_SIZE: ${ML_WINDOW_SIZE:-20}
+
+      # Feature flags
+      ENABLE_ML: ${ENABLE_ML:-true}
+    volumes:
+      - ml-models:/app/models
+    networks:
+      - edge-net
+
+  # --------------------------------------------------------------------------
+  # Notification Service — NestJS
+  # Consome stream: anomaly.detected
+  # Publica stream: alert.created
+  # Chama Actuator Service via HTTP (orquestração direta para comandos)
+  # --------------------------------------------------------------------------
+  notification-service:
+    build:
+      context: ../services/notification-service
+      dockerfile: Dockerfile
+    container_name: edge-notification
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3004:3000"
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      LOCATION_ID: ${LOCATION_ID:?LOCATION_ID é obrigatório}
+
+      # Redis
+      REDIS_URL: redis://redis:6379
+
+      # Postgres (leitura de thresholds e configurações)
+      POSTGRES_URL: postgresql://${POSTGRES_USER:-edge_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-edge_db}
+
+      # Orquestração direta para atuadores
+      ACTUATOR_SERVICE_URL: http://actuator-service:3000
+
+      # Cooldown entre alertas do mesmo device/métrica (evita flood)
+      ALERT_COOLDOWN_SECONDS: ${ALERT_COOLDOWN_SECONDS:-60}
+
+      # Feature flags
+      ENABLE_NOTIFICATIONS: ${ENABLE_NOTIFICATIONS:-true}
+    networks:
+      - edge-net
+
+  # --------------------------------------------------------------------------
+  # Actuator Service — NestJS
+  # Recebe comandos via HTTP (do Notification Service)
+  # Publica no tópico MQTT do dispositivo
+  # Aguarda confirmação de status e publica eventos de resultado
+  # --------------------------------------------------------------------------
+  actuator-service:
+    build:
+      context: ../services/actuator-service
+      dockerfile: Dockerfile
+    container_name: edge-actuator
+    restart: unless-stopped
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "3005:3000"
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      LOCATION_ID: ${LOCATION_ID:?LOCATION_ID é obrigatório}
+
+      # MQTT (publica comandos, subscreve em status)
+      MQTT_BROKER_URL: mqtt://mosquitto:1883
+      MQTT_USERNAME: ${MQTT_EDGE_USERNAME:-edge-server}
+      MQTT_PASSWORD: ${MQTT_EDGE_PASSWORD:?MQTT_EDGE_PASSWORD é obrigatório}
+
+      # Redis
+      REDIS_URL: redis://redis:6379
+
+      # Timeout para aguardar confirmação do dispositivo
+      ACTUATOR_CONFIRM_TIMEOUT_MS: ${ACTUATOR_CONFIRM_TIMEOUT_MS:-5000}
+      ACTUATOR_MAX_RETRIES: ${ACTUATOR_MAX_RETRIES:-3}
+
+      # Feature flags
+      ENABLE_ACTUATORS: ${ENABLE_ACTUATORS:-true}
+    networks:
+      - edge-net

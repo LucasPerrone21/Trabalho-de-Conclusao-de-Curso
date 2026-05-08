@@ -1,0 +1,50 @@
+version: "3.9"
+
+# =============================================================================
+# TCC IoT Platform — Stress Test (100 sensores)
+# Uso: docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
+# =============================================================================
+#
+# Este arquivo sobrescreve/estende o docker-compose.yml base.
+# Não sobe infraestrutura novamente — apenas ajusta serviços e sobe simuladores.
+# =============================================================================
+
+services:
+
+  # Aumenta batch size do InfluxDB para aguentar o volume
+  persistence-service:
+    environment:
+      INFLUXDB_BATCH_SIZE: "200"
+      INFLUXDB_FLUSH_INTERVAL_MS: "2000"
+
+  # Simulador de sensores — escalonável via --scale
+  # Uso: docker compose ... up -d --scale sensor-simulator=10
+  # Cada réplica sobe N sensores configurados via SENSORS_PER_INSTANCE
+  sensor-simulator:
+    build:
+      context: ../simulator/mqtt-publisher
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+    environment:
+      LOCATION_ID: ${LOCATION_ID:?LOCATION_ID é obrigatório}
+      MQTT_BROKER_URL: mqtt://mosquitto:1883
+      MQTT_USERNAME: ${MQTT_SIM_USERNAME:-simulator}
+      MQTT_PASSWORD: ${MQTT_SIM_PASSWORD:?MQTT_SIM_PASSWORD é obrigatório}
+
+      # Cada instância simula N sensores
+      SENSORS_PER_INSTANCE: ${SENSORS_PER_INSTANCE:-10}
+
+      # Intervalo de publicação em ms (500ms = 2 msg/s por sensor)
+      PUBLISH_INTERVAL_MS: ${PUBLISH_INTERVAL_MS:-500}
+
+      # Tipos de métricas simuladas
+      METRICS: "temperature,humidity,pressure,co2,luminosity"
+
+      # Injeção de anomalias para testar o ML Service (% de chance por leitura)
+      ANOMALY_INJECTION_RATE: ${ANOMALY_INJECTION_RATE:-0.05}
+    networks:
+      - edge-net
+    deploy:
+      replicas: 10  # 10 instâncias × 10 sensores = 100 sensores

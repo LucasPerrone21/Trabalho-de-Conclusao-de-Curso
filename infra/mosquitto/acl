@@ -1,0 +1,36 @@
+# =============================================================================
+# Mosquitto — ACL (Access Control List)
+# Cada device só publica nos seus próprios tópicos.
+# O edge-server tem acesso total à localidade.
+# =============================================================================
+
+# --------------------------------------------------------------------------
+# Edge Server — acesso total à localidade
+# Subscreve em tudo, publica comandos para atuadores
+# --------------------------------------------------------------------------
+user edge-server
+topic readwrite #
+
+# --------------------------------------------------------------------------
+# Simulador — publica como se fossem sensores reais
+# Usado no stress test. Em produção, cada device teria seu próprio usuário.
+# --------------------------------------------------------------------------
+user simulator
+topic write #
+
+# --------------------------------------------------------------------------
+# Healthcheck — usuário interno para health check do container
+# --------------------------------------------------------------------------
+user healthcheck-user
+topic write healthcheck
+
+# --------------------------------------------------------------------------
+# TEMPLATE para devices reais (ESP32 físicos)
+# Em produção, cada device teria entrada própria:
+#
+# user esp32-a4f3
+# topic write ufba/esp32-a4f3/#
+# topic read  ufba/esp32-a4f3/cmd
+#
+# Para o TCC simulado, o usuário 'simulator' cobre todos os devices.
+# --------------------------------------------------------------------------
