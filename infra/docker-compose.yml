@@ -219,3 +219,24 @@ services:
     networks:
       - edge-net
   # --------------------------------------------------------------------------
+
+  grafana:
+    image: grafana/grafana:10.4.1
+    container_name: edge-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD é obrigatório}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DEVICE_AUTH_REQUIRE_DEVICE_AUTH: "false"
+    networks:
+      - edge-net
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:3000/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
