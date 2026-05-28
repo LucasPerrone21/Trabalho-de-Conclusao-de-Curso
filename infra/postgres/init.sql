@@ -28,8 +28,8 @@ CREATE TABLE devices (
     location_id UUID NOT NULL REFERENCES locations(id),
     type        VARCHAR(32) NOT NULL           -- 'sensor' | 'actuator'
                 CHECK (type IN ('sensor', 'actuator')),
-    status      VARCHAR(32) NOT NULL DEFAULT 'active'
-                CHECK (status IN ('active', 'inactive', 'maintenance')),
+    status      VARCHAR(32) NOT NULL DEFAULT 'pending'
+                CHECK (status IN ('pending', 'active', 'inactive', 'maintenance')),
     metadata    JSONB,                         -- campos extras sem schema fixo
     registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_seen_at  TIMESTAMPTZ
@@ -107,3 +107,11 @@ CREATE TABLE users (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_login_at TIMESTAMPTZ
 );
+
+-- =============================================================================
+-- Seed inicial — Localidade padrão
+-- LOCATION_ID configurado no .env deve corresponder ao slug aqui
+-- =============================================================================
+INSERT INTO locations (slug, name, description)
+VALUES ('ufba', 'UFBA — Campus Federação', 'Localidade padrão do Edge Server')
+ON CONFLICT (slug) DO NOTHING;

@@ -220,6 +220,37 @@ services:
       - edge-net
   # --------------------------------------------------------------------------
 
+  # --------------------------------------------------------------------------
+  # Ingest Service — NestJS
+  # Consome MQTT, deduplica via Redis, publica em sensor.data.received
+  # --------------------------------------------------------------------------
+  ingest-service:
+    build:
+      context: ../services/ingest-service
+      dockerfile: Dockerfile
+    container_name: edge-ingest
+    restart: unless-stopped
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      LOCATION_ID: ${LOCATION_ID:?LOCATION_ID é obrigatório}
+      MQTT_BROKER_HOST: mosquitto
+      MQTT_BROKER_PORT: 1883
+      MQTT_EDGE_USERNAME: ${MQTT_EDGE_USERNAME:-edge-server}
+      MQTT_EDGE_PASSWORD: ${MQTT_EDGE_PASSWORD:?MQTT_EDGE_PASSWORD é obrigatório}
+      REDIS_URL: redis://redis:6379
+      DEDUP_TTL_SECONDS: ${DEDUP_TTL_SECONDS:-30}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-edge_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-edge_db}
+    networks:
+      - edge-net
+  # --------------------------------------------------------------------------
+
   grafana:
     image: grafana/grafana:10.4.1
     container_name: edge-grafana
@@ -240,3 +271,4 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+

@@ -114,11 +114,10 @@ def generate_value(metric: MetricConfig, inject_anomaly: bool) -> float:
     """
     Gera um valor para a métrica.
 
-    Modo normal: caminhada aleatória dentro do range normal do sensor.
+    Modo normal: valor aleatório dentro do range normal do sensor.
     Modo anomalia: valor fora do range normal, dentro dos limites de anomalia.
     """
     if inject_anomaly:
-        # Escolhe aleatoriamente se a anomalia é abaixo do mínimo ou acima do máximo
         if random.random() < 0.5 and metric.anomaly_min < metric.min:
             value = random.uniform(metric.anomaly_min, metric.min - 0.1)
         else:
@@ -147,56 +146,80 @@ def build_payload(
 
 
 # ---------------------------------------------------------------------------
-# Publisher
+# Simuladores
 # ---------------------------------------------------------------------------
 
-class DeviceSimulator:
-    """Simula um único dispositivo publicando todas as suas métricas."""
+class MetricSimulator:
+    """
+    Simula uma única métrica de um dispositivo.
 
-    def __init__(self, device: DeviceConfig, config: SimulatorConfig):
+    Cada métrica tem seu próprio loop e intervalo independente,
+    refletindo o comportamento real de sensores físicos que medem
+    de forma autônoma — sem esperar outras métricas do mesmo device.
+    """
+
+    def __init__(self, device: DeviceConfig, metric: MetricConfig, config: SimulatorConfig):
         self.device = device
+        self.metric = metric
         self.config = config
         self._interval = config.publish_interval_ms / 1000.0
 
     async def run(self, client: aiomqtt.Client) -> None:
+        topic = f"{self.config.location_id}/{self.device.id}/{self.metric.name}"
+
+        while True:
+            inject_anomaly = random.random() < self.config.anomaly_rate
+            value = generate_value(self.metric, inject_anomaly)
+            payload = build_payload(self.device.id, self.metric, value)
+
+            await client.publish(
+                topic=topic,
+                payload=json.dumps(payload),
+                qos=1,
+            )
+
+            if inject_anomaly:
+                logger.warning(
+                    "anomaly injected | device=%s metric=%s value=%s (normal range: %s–%s)",
+                    self.device.id,
+                    self.metric.name,
+                    value,
+                    self.metric.min,
+                    self.metric.max,
+                )
+            else:
+                logger.debug(
+                    "published | topic=%s value=%s %s",
+                    topic,
+                    value,
+                    self.metric.unit,
+                )
+
+            await asyncio.sleep(self._interval)
+
+
+class DeviceSimulator:
+    """
+    Coordena as métricas de um dispositivo.
+    Cada métrica sobe como corrotina independente.
+    """
+
+    def __init__(self, device: DeviceConfig, config: SimulatorConfig):
+        self.device = device
+        self.config = config
+
+    def metric_tasks(self, client: aiomqtt.Client) -> list[asyncio.Task]:
         logger.info(
-            "device started | id=%s alias=%s metrics=%s",
+            "device starting | id=%s alias=%s metrics=%s interval=%dms",
             self.device.id,
             self.device.alias,
             [m.name for m in self.device.metrics],
+            self.config.publish_interval_ms,
         )
-
-        while True:
-            for metric in self.device.metrics:
-                inject_anomaly = random.random() < self.config.anomaly_rate
-                value = generate_value(metric, inject_anomaly)
-                payload = build_payload(self.device.id, metric, value)
-                topic = f"{self.config.location_id}/{self.device.id}/{metric.name}"
-
-                await client.publish(
-                    topic=topic,
-                    payload=json.dumps(payload),
-                    qos=1,
-                )
-
-                if inject_anomaly:
-                    logger.warning(
-                        "anomaly injected | device=%s metric=%s value=%s (normal range: %s–%s)",
-                        self.device.id,
-                        metric.name,
-                        value,
-                        metric.min,
-                        metric.max,
-                    )
-                else:
-                    logger.debug(
-                        "published | topic=%s value=%s %s",
-                        topic,
-                        value,
-                        metric.unit,
-                    )
-
-            await asyncio.sleep(self._interval)
+        return [
+            asyncio.create_task(MetricSimulator(self.device, metric, self.config).run(client))
+            for metric in self.device.metrics
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -206,13 +229,17 @@ class DeviceSimulator:
 async def main() -> None:
     config = load_config()
 
+    total_metrics = sum(len(d.metrics) for d in config.devices)
+    msgs_per_second = total_metrics / (config.publish_interval_ms / 1000.0)
+
     logger.info(
-        "simulator starting | location=%s devices=%d broker=%s:%d interval=%dms anomaly_rate=%.0f%%",
+        "simulator starting | location=%s devices=%d metrics=%d ~%.0f msg/s broker=%s:%d anomaly_rate=%.0f%%",
         config.location_id,
         len(config.devices),
+        total_metrics,
+        msgs_per_second,
         config.mqtt_broker_host,
         config.mqtt_broker_port,
-        config.publish_interval_ms,
         config.anomaly_rate * 100,
     )
 
@@ -236,16 +263,18 @@ async def main() -> None:
     ) as client:
         logger.info("connected to broker %s:%d", config.mqtt_broker_host, config.mqtt_broker_port)
 
-        # Sobe uma corrotina por device — todos publicam de forma independente
+        # Uma task por métrica — todas correm de forma completamente independente
         tasks = [
-            asyncio.create_task(DeviceSimulator(device, config).run(client))
+            task
             for device in config.devices
+            for task in DeviceSimulator(device, config).metric_tasks(client)
         ]
 
-        # Aguarda sinal de shutdown
+        logger.info("started %d metric coroutines", len(tasks))
+
         await stop_event.wait()
 
-        logger.info("stopping %d device tasks...", len(tasks))
+        logger.info("stopping %d tasks...", len(tasks))
         for task in tasks:
             task.cancel()
 
