@@ -1,0 +1,19 @@
+# =============================================================================
+# simulator/mqtt-publisher — .gitignore
+# =============================================================================
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Instaladores baixados localmente
+*.deb
+*.AppImage
+
+# Env local
+.env
