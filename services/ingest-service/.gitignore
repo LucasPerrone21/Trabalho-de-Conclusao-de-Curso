@@ -1,0 +1,21 @@
+# =============================================================================
+# ingest-service — .gitignore
+# =============================================================================
+
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Logs
+logs/
+*.log
+
+# Prisma — client gerado em runtime via "prisma generate"
+# O schema.prisma DEVE ser commitado; o client gerado, não
+node_modules/.prisma/
+node_modules/@prisma/client/
+
+# Env local
+.env
+.env.local
