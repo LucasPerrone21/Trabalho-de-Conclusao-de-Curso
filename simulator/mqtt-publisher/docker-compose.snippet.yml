@@ -1,0 +1,28 @@
+# =============================================================================
+# Adicione este serviço ao infra/docker-compose.yml
+# na seção services:
+# =============================================================================
+
+  sensor-simulator:
+    build:
+      context: ../simulator/mqtt-publisher
+      dockerfile: Dockerfile
+    container_name: edge-simulator
+    restart: unless-stopped
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    environment:
+      LOCATION_ID: ${LOCATION_ID:?LOCATION_ID é obrigatório}
+      MQTT_BROKER_HOST: mosquitto
+      MQTT_BROKER_PORT: 1883
+      MQTT_USERNAME: ${MQTT_SIM_USERNAME:-simulator}
+      MQTT_PASSWORD: ${MQTT_SIM_PASSWORD:?MQTT_SIM_PASSWORD é obrigatório}
+      PUBLISH_INTERVAL_MS: ${PUBLISH_INTERVAL_MS:-500}
+      ANOMALY_INJECTION_RATE: ${ANOMALY_INJECTION_RATE:-0.05}
+      DEVICES_CONFIG: /app/config/devices.json
+    volumes:
+      # Monta o arquivo de devices do host — edite e reinicie o container
+      - ../simulator/mqtt-publisher/config/devices.json:/app/config/devices.json:ro
+    networks:
+      - edge-net

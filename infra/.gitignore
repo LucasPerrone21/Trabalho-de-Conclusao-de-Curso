@@ -1,0 +1,17 @@
+# =============================================================================
+# infra — .gitignore
+# =============================================================================
+
+# O .env contém senhas — NUNCA commitar
+# O .env.example DEVE ser commitado (template sem valores reais)
+.env
+!.env.example
+
+# Dados persistidos pelos containers (gerados em runtime)
+mosquitto/data/
+mosquitto/log/
+postgres/data/
+redis/data/
+
+# Arquivo temporário de edição
+edit.txt
