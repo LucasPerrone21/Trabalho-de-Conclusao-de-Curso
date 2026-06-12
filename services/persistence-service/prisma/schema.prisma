@@ -1,0 +1,138 @@
+// This is your Prisma schema file.
+// Reflects the schema defined in infra/postgres/init.sql.
+// NÃO use "prisma migrate" — a criação do schema é feita pelo init.sql.
+// Use apenas "prisma generate" para gerar o client tipado.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Localidades
+// ---------------------------------------------------------------------------
+model Location {
+  id          String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  slug        String   @unique @db.VarChar(64)
+  name        String   @db.VarChar(255)
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  devices Device[]
+
+  @@map("locations")
+}
+
+// ---------------------------------------------------------------------------
+// Devices (sensores e atuadores)
+// type:   'sensor' | 'actuator'   (CHECK no SQL, String no Prisma)
+// status: 'pending' | 'active' | 'inactive' | 'maintenance'
+// ---------------------------------------------------------------------------
+model Device {
+  id           String    @id @db.VarChar(64)
+  alias        String    @db.VarChar(255)
+  locationId   String    @map("location_id") @db.Uuid
+  type         String    @db.VarChar(32)
+  status       String    @default("pending") @db.VarChar(32)
+  metadata     Json?
+  registeredAt DateTime  @default(now()) @map("registered_at") @db.Timestamptz
+  lastSeenAt   DateTime? @map("last_seen_at") @db.Timestamptz
+
+  location   Location          @relation(fields: [locationId], references: [id])
+  thresholds Threshold[]
+  alerts     Alert[]
+  commands   ActuatorCommand[]
+
+  @@index([locationId], map: "idx_devices_location")
+  @@index([type], map: "idx_devices_type")
+  @@map("devices")
+}
+
+// ---------------------------------------------------------------------------
+// Thresholds — regras estáticas de anomalia por device/métrica
+// severity: 'info' | 'warning' | 'critical'
+// ---------------------------------------------------------------------------
+model Threshold {
+  id        String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  deviceId  String   @map("device_id") @db.VarChar(64)
+  metric    String   @db.VarChar(64)
+  minValue  Decimal? @map("min_value") @db.Decimal
+  maxValue  Decimal? @map("max_value") @db.Decimal
+  severity  String   @default("warning") @db.VarChar(32)
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  device Device @relation(fields: [deviceId], references: [id])
+
+  @@unique([deviceId, metric])
+  @@map("thresholds")
+}
+
+// ---------------------------------------------------------------------------
+// Alertas — registro de anomalias detectadas
+// anomalyType: 'threshold_exceeded' | 'statistical_outlier'
+// status:      'open' | 'acknowledged' | 'resolved'
+// ---------------------------------------------------------------------------
+model Alert {
+  id            String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  deviceId      String    @map("device_id") @db.VarChar(64)
+  metric        String    @db.VarChar(64)
+  value         Decimal   @db.Decimal
+  anomalyType   String    @map("anomaly_type") @db.VarChar(64)
+  severity      String    @db.VarChar(32)
+  status        String    @default("open") @db.VarChar(32)
+  sourceEventId String?   @map("source_event_id") @db.Uuid
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  resolvedAt    DateTime? @map("resolved_at") @db.Timestamptz
+
+  device   Device            @relation(fields: [deviceId], references: [id])
+  commands ActuatorCommand[]
+
+  @@index([deviceId], map: "idx_alerts_device")
+  @@index([status], map: "idx_alerts_status")
+  @@index([createdAt(sort: Desc)], map: "idx_alerts_created")
+  @@map("alerts")
+}
+
+// ---------------------------------------------------------------------------
+// Comandos de atuadores
+// status: 'sent' | 'confirmed' | 'failed' | 'timeout'
+// ---------------------------------------------------------------------------
+model ActuatorCommand {
+  id          String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  deviceId    String    @map("device_id") @db.VarChar(64)
+  alertId     String?   @map("alert_id") @db.Uuid
+  command     String    @db.VarChar(64)
+  parameters  Json?
+  status      String    @default("sent") @db.VarChar(32)
+  sentAt      DateTime  @default(now()) @map("sent_at") @db.Timestamptz
+  confirmedAt DateTime? @map("confirmed_at") @db.Timestamptz
+  retries     Int       @default(0)
+
+  device Device @relation(fields: [deviceId], references: [id])
+  alert  Alert? @relation(fields: [alertId], references: [id])
+
+  @@index([deviceId], map: "idx_commands_device")
+  @@index([alertId], map: "idx_commands_alert")
+  @@map("actuator_commands")
+}
+
+// ---------------------------------------------------------------------------
+// Usuários — autenticação no sistema
+// role: 'admin' | 'operator' | 'viewer'
+// ---------------------------------------------------------------------------
+model User {
+  id           String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  email        String    @unique @db.VarChar(255)
+  passwordHash String    @map("password_hash") @db.VarChar(255)
+  role         String    @default("viewer") @db.VarChar(32)
+  active       Boolean   @default(true)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz
+
+  @@map("users")
+}

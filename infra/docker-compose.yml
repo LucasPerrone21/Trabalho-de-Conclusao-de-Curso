@@ -251,6 +251,37 @@ services:
       - edge-net
   # --------------------------------------------------------------------------
 
+  # --------------------------------------------------------------------------
+  # Persistence Service — NestJS
+  # Consome sensor.data.received → persiste no InfluxDB e Postgres
+  # --------------------------------------------------------------------------
+  persistence-service:
+    build:
+      context: ../services/persistence-service
+      dockerfile: Dockerfile
+    container_name: edge-persistence
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgresql://${POSTGRES_USER:-edge_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-edge_db}
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:?INFLUXDB_TOKEN é obrigatório}
+      INFLUXDB_ORG: ${INFLUXDB_ORG:-tcc-iot}
+      INFLUXDB_BUCKET: ${INFLUXDB_BUCKET:-sensor_readings}
+      INFLUXDB_BATCH_SIZE: ${INFLUXDB_BATCH_SIZE:-50}
+      INFLUXDB_FLUSH_INTERVAL_MS: ${INFLUXDB_FLUSH_INTERVAL_MS:-5000}
+    networks:
+      - edge-net
+  # --------------------------------------------------------------------------
+
   grafana:
     image: grafana/grafana:10.4.1
     container_name: edge-grafana
@@ -261,6 +292,11 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD é obrigatório}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_DEVICE_AUTH_REQUIRE_DEVICE_AUTH: "false"
+      # Injetado no influxdb.yml via ${INFLUXDB_TOKEN}
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:?INFLUXDB_TOKEN é obrigatório}
+    volumes:
+      # Provisioning automático: datasource criada ao subir o container
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
     networks:
       - edge-net
     depends_on:
